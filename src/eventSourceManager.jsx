@@ -56,7 +56,10 @@ let lastFlushTime = 0;
 let needsFlush = false;
 
 // Control buffer debug logging (set to true only for debugging buffer issues)
-const DEBUG_BUFFERS = false;
+let DEBUG_BUFFERS = false;
+export const setDebugBuffers = (enabled) => {
+    DEBUG_BUFFERS = !!enabled;
+};
 const debugLog = (...args) => {
     if (DEBUG_BUFFERS) logger.debug(...args);
 };

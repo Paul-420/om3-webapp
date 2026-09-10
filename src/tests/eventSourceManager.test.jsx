@@ -531,10 +531,40 @@ describe('eventSourceManager', () => {
             expect(mockStore.removeInstanceFromObject).not.toHaveBeenCalled();
         });
 
+        test('should use labels.path and labels.node fallback in InstanceConfigDeleted', () => {
+            const es = createES();
+            const handler = getHandler(es, 'InstanceConfigDeleted');
+            fire(handler, {labels: {path: 'obj1', node: 'node1'}});
+            vi.runAllTimers();
+            expect(mockStore.removeInstanceFromObject).toHaveBeenCalledWith('obj1', 'node1');
+            expect(mockStore.removePendingDelete).toHaveBeenCalledWith('obj1', 'node1');
+            expect(console.warn).not.toHaveBeenCalledWith(
+                '⚠️ InstanceConfigDeleted event missing path or node:', expect.any(Object)
+            );
+        });
+
         test('should handle invalid JSON in events', () => {
             const es = createES();
             getHandler(es, 'NodeStatusUpdated')({data: 'invalid json {['});
             expect(console.warn).toHaveBeenCalledWith('⚠️ Invalid JSON in NodeStatusUpdated event:', 'invalid json {[');
+        });
+
+        test('should call logger.debug when DEBUG_BUFFERS is enabled (line 61)', () => {
+            eventSourceManager.setDebugBuffers(true);
+            try {
+                const es = createES();
+                const handler = getHandler(es, 'NodeStatusUpdated');
+                fire(handler, {node: 'node1', node_status: {status: 'up'}});
+
+                // debugLog is invoked from updateBuffer with the merged value.
+                // The real logger wraps console.debug, which is already spied.
+                expect(console.debug).toHaveBeenCalled();
+
+                // flush to drain buffers cleanly
+                vi.runAllTimers();
+            } finally {
+                eventSourceManager.setDebugBuffers(false);
+            }
         });
 
         test('should handle empty buffers gracefully', () => {
@@ -631,6 +661,32 @@ describe('eventSourceManager', () => {
                 expect.objectContaining({node1: {status: 'up'}, node99: {status: 'up'}})
             );
             mockStore.setNodeStatuses = originalSetNodeStatuses;
+        });
+
+        test('should early-return from flushBuffers when isFlushing is true (line 173)', () => {
+            const es = createES();
+            const handler = getHandler(es, 'NodeStatusUpdated');
+            const originalSetNodeStatuses = mockStore.setNodeStatuses;
+            let reentered = false;
+            mockStore.setNodeStatuses = vi.fn((v) => {
+                originalSetNodeStatuses(v);
+                if (!reentered) {
+                    reentered = true;
+                    // flushBuffers is now running with isFlushing=true.
+                    // Calling forceFlush → flushBuffers → hits the `|| isFlushing` branch.
+                    eventSourceManager.forceFlush();
+                }
+            });
+            try {
+                fire(handler, {node: 'node1', node_status: {status: 'up'}});
+                vi.clearAllTimers();
+                eventSourceManager.forceFlush();
+                expect(reentered).toBe(true);
+                // The re-entrant call returned early, so setNodeStatuses ran only once
+                expect(mockStore.setNodeStatuses).toHaveBeenCalledTimes(1);
+            } finally {
+                mockStore.setNodeStatuses = originalSetNodeStatuses;
+            }
         });
 
         test('should debounce multiple rapid events into a single flush', () => {
@@ -745,6 +801,104 @@ describe('eventSourceManager', () => {
             expect(mockStore.setConfigUpdated.mock.calls[0][0].length).toBeGreaterThanOrEqual(1);
         });
 
+        test('should keep configUpdated entries that parse without name or node', () => {
+            const es = createES();
+            const handler = getHandler(es, 'InstanceConfigUpdated');
+            fire(handler, {path: 'obj1', node: 'node1', instance_config: {x: 1}});
+
+            const originalParse = JSON.parse;
+            JSON.parse = vi.fn((str) => {
+                if (str.includes('"node":"node1"')) return {foo: 'bar'};
+                return originalParse(str);
+            });
+            try {
+                eventSourceManager.forceFlush();
+            } finally {
+                JSON.parse = originalParse;
+            }
+
+            expect(mockStore.setConfigUpdated).toHaveBeenCalled();
+            const updates = mockStore.setConfigUpdated.mock.calls[0][0];
+            expect(updates).toContain(JSON.stringify({name: 'obj1', node: 'node1'}));
+        });
+
+        test('should skip configUpdated entries matching a pending delete by node and path', () => {
+            const es = createES();
+            const handler = getHandler(es, 'InstanceConfigUpdated');
+            fire(handler, {path: 'my-service/obj1', node: 'node1', instance_config: {x: 1}});
+            mockStore.pendingDeletes = {'my-service/obj1:node1': true};
+            eventSourceManager.forceFlush();
+            expect(mockStore.setConfigUpdated).not.toHaveBeenCalled();
+        });
+
+        test('should handle store with undefined pendingDeletes (line 194)', () => {
+            const saved = mockStore.pendingDeletes;
+            mockStore.pendingDeletes = undefined;
+            try {
+                const es = createES();
+                fire(getHandler(es, 'NodeStatusUpdated'), {node: 'node1', node_status: {status: 'up'}});
+                vi.runAllTimers();
+                expect(mockStore.setNodeStatuses).toHaveBeenCalledWith(
+                    expect.objectContaining({node1: {status: 'up'}})
+                );
+            } finally {
+                mockStore.pendingDeletes = saved;
+            }
+        });
+
+        test('should merge repeated buffer updates for instanceStatus, instanceConfig, instanceMonitor, and catch-all (lines 444/455/459/463)', () => {
+            {
+                const es = createES();
+                const h = getHandler(es, 'InstanceStatusUpdated');
+                fire(h, {path: 'obj1', node: 'n1', instance_status: {a: 1}});
+                fire(h, {path: 'obj1', node: 'n1', instance_status: {b: 2}});
+                eventSourceManager.forceFlush();
+                expect(mockStore.setInstanceStatuses).toHaveBeenCalledWith(
+                    expect.objectContaining({obj1: {n1: {a: 1, b: 2}}})
+                );
+                eventSourceManager.closeEventSource();
+            }
+            vi.clearAllMocks();
+            mockNow += 1_000_000;
+
+            {
+                const es = createES();
+                const h = getHandler(es, 'InstanceConfigUpdated');
+                fire(h, {path: 'obj1', node: 'n1', instance_config: {a: 1}});
+                fire(h, {path: 'obj1', node: 'n1', instance_config: {b: 2}});
+                eventSourceManager.forceFlush();
+                expect(mockStore.setInstanceConfig).toHaveBeenCalledWith('obj1', 'n1', {a: 1, b: 2});
+                eventSourceManager.closeEventSource();
+            }
+            vi.clearAllMocks();
+            mockNow += 1_000_000;
+
+            {
+                const es = createES();
+                const h = getHandler(es, 'InstanceMonitorUpdated');
+                fire(h, {node: 'n1', path: 'obj1', instance_monitor: {a: 1}});
+                fire(h, {node: 'n1', path: 'obj1', instance_monitor: {b: 2}});
+                eventSourceManager.forceFlush();
+                expect(mockStore.setInstanceMonitors).toHaveBeenCalledWith(
+                    expect.objectContaining({'n1:obj1': {a: 1, b: 2}})
+                );
+                eventSourceManager.closeEventSource();
+            }
+            vi.clearAllMocks();
+            mockNow += 1_000_000;
+
+            {
+                const es = createES();
+                const h = getHandler(es, 'NodeStatusUpdated');
+                fire(h, {node: 'n1', node_status: {a: 1}});
+                fire(h, {node: 'n1', node_status: {b: 2}});
+                eventSourceManager.forceFlush();
+                expect(mockStore.setNodeStatuses).toHaveBeenCalledWith(
+                    expect.objectContaining({n1: {a: 1, b: 2}})
+                );
+            }
+        });
+
         test('should flush in setTimeout callback when eventCount > 0', () => {
             const es = createES();
             const handler = getHandler(es, 'NodeStatusUpdated');
@@ -755,6 +909,61 @@ describe('eventSourceManager', () => {
             expect(mockStore.setNodeStatuses).toHaveBeenCalledWith(
                 expect.objectContaining({node1: {status: 'up'}, node2: {status: 'down'}})
             );
+        });
+
+        test('should hit second scheduleFlush branch when flushTimeoutId is null and eventCount > 1', () => {
+            const perf = global.performance;
+            const originalNow = perf.now;
+            let shouldThrow = false;
+            perf.now = () => {
+                if (shouldThrow) throw new Error('mock perf error');
+                return mockNow;
+            };
+
+            try {
+                const es = createES();
+                const handler = getHandler(es, 'NodeStatusUpdated');
+
+                fire(handler, {node: 'node1', node_status: {status: 'up'}});
+
+                shouldThrow = true;
+                try {
+                    vi.advanceTimersByTime(10);
+                } catch (e) {}
+                shouldThrow = false;
+
+                const setTimeoutSpy = vi.spyOn(global, 'setTimeout');
+                fire(handler, {node: 'node2', node_status: {status: 'up'}});
+
+                const tenMsCalls = setTimeoutSpy.mock.calls.filter(c => c[1] === 10);
+                expect(tenMsCalls.length).toBeGreaterThan(0);
+                setTimeoutSpy.mockRestore();
+
+                vi.advanceTimersByTime(1000);
+            } finally {
+                perf.now = originalNow;
+            }
+        });
+
+        test('should hit !isPageActive early return in scheduleFlush (line 325)', () => {
+            const es = createES();
+            const originalParse = JSON.parse;
+            let toggled = false;
+            JSON.parse = vi.fn((str) => {
+                if (!toggled) {
+                    toggled = true;
+                    eventSourceManager.setPageActive(false);
+                }
+                return originalParse(str);
+            });
+            try {
+                const handler = getHandler(es, 'NodeStatusUpdated');
+                fire(handler, {node: 'node1', node_status: {status: 'up'}});
+                expect(mockStore.setNodeStatuses).not.toHaveBeenCalled();
+            } finally {
+                JSON.parse = originalParse;
+                eventSourceManager.setPageActive(true);
+            }
         });
     });
 
@@ -1003,15 +1212,40 @@ describe('eventSourceManager', () => {
             expect(EventSourcePolyfill.mock.calls[0][0]).toContain('path');
         });
 
-        test('should call createLoggerEventSource on logger reconnect timeout', () => {
-            const spy = vi.spyOn(eventSourceManager, 'createLoggerEventSource');
+        test('should reconnect logger EventSource after timeout with valid token', () => {
+            // reset global reconnectAttempts
+            eventSourceManager.createEventSource(URL_NODE_EVENT, 'temp-token');
+            eventSourceManager.closeEventSource();
+            vi.clearAllMocks();
+
+            localStorageMock.getItem.mockReturnValue('fake-token');
             eventSourceManager.createLoggerEventSource(URL_NODE_EVENT, 'fake-token', ['ObjectStatusUpdated']);
+            expect(EventSourcePolyfill).toHaveBeenCalledTimes(1);
+
             mockLoggerEventSource.onerror({status: 500});
-            vi.advanceTimersByTime(1100);
-            expect(spy).toHaveBeenCalledWith(
-                URL_NODE_EVENT, expect.any(String), expect.arrayContaining(['ObjectStatusUpdated'])
-            );
-            spy.mockRestore();
+            vi.advanceTimersByTime(5000);
+
+            expect(EventSourcePolyfill).toHaveBeenCalledTimes(2);
+            const secondCallUrl = vi.mocked(EventSourcePolyfill).mock.calls[1][0];
+            expect(secondCallUrl).toBe(URL_NODE_EVENT);
+
+            const secondES = vi.mocked(EventSourcePolyfill).mock.results[1].value;
+            const attachedEvents = secondES.addEventListener.mock.calls.map(c => c[0]);
+            expect(attachedEvents).toContain('ObjectStatusUpdated');
+        });
+
+        test('should not reconnect logger when no current token in setTimeout callback', () => {
+            eventSourceManager.createLoggerEventSource(URL_NODE_EVENT, 'fake-token', ['ObjectStatusUpdated']);
+            expect(EventSourcePolyfill).toHaveBeenCalledTimes(1);
+
+            // Simulate logout between error and reconnect
+            localStorageMock.getItem.mockReturnValue(null);
+            mockLoggerEventSource.onerror({status: 500});
+            // Clear current logger so getCurrentToken returns null
+            eventSourceManager.closeLoggerEventSource();
+            vi.advanceTimersByTime(5000);
+            // createLoggerEventSource should not have been called again
+            expect(EventSourcePolyfill).toHaveBeenCalledTimes(1);
         });
     });
 
