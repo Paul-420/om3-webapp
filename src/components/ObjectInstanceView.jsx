@@ -451,15 +451,7 @@ const ObjectInstanceView = () => {
 
         const token = localStorage.getItem("authToken");
         if (token) {
-            const filters = instanceEventTypes.map(type => {
-                if (["CONNECTION_OPENED", "CONNECTION_ERROR", "RECONNECTION_ATTEMPT", "MAX_RECONNECTIONS_REACHED", "CONNECTION_CLOSED"].includes(type)) {
-                    return type;
-                } else {
-                    return `${type},path=${decodedObjectName},node=${nodeName}`;
-                }
-            });
-
-            startEventReception(token, filters);
+            startEventReception(token, instanceEventTypes, decodedObjectName);
         }
 
         const timer = setTimeout(() => {
@@ -984,39 +976,32 @@ const ObjectInstanceView = () => {
             <Popper open={Boolean(instanceMenuAnchor)} anchorEl={instanceMenuAnchor} {...popperProps}>
                 <ClickAwayListener onClickAway={() => setInstanceMenuAnchor(null)}>
                     <Paper elevation={3} role="menu">
-                        {filteredInstanceActions.map(({name, icon, color}) => {
-                            const isAllowed = true;
-                            return (
-                                <MenuItem
-                                    key={name}
-                                    onClick={() => {
-                                        handleInstanceAction(name);
-                                        setInstanceMenuAnchor(null);
-                                    }}
-                                    disabled={actionInProgress}
+                        {filteredInstanceActions.map(({name, icon, color}) => (
+                            <MenuItem
+                                key={name}
+                                onClick={() => {
+                                    handleInstanceAction(name);
+                                    setInstanceMenuAnchor(null);
+                                }}
+                                disabled={actionInProgress}
+                                sx={{
+                                    color: color === "red" ? "error.main" : "inherit",
+                                    '&.Mui-disabled': {opacity: 0.5},
+                                }}
+                            >
+                                <ListItemIcon
                                     sx={{
-                                        color: isAllowed
-                                            ? (color === "red" ? "error.main" : "inherit")
-                                            : "text.disabled",
-                                        '&.Mui-disabled': {opacity: 0.5},
+                                        minWidth: 40,
+                                        color: color === "red" ? "error.main" : "inherit",
                                     }}
                                 >
-                                    <ListItemIcon
-                                        sx={{
-                                            minWidth: 40,
-                                            color: isAllowed
-                                                ? (color === "red" ? "error.main" : "inherit")
-                                                : "text.disabled"
-                                        }}
-                                    >
-                                        {icon}
-                                    </ListItemIcon>
-                                    <ListItemText>
-                                        {name.charAt(0).toUpperCase() + name.slice(1)}
-                                    </ListItemText>
-                                </MenuItem>
-                            );
-                        })}
+                                    {icon}
+                                </ListItemIcon>
+                                <ListItemText>
+                                    {name.charAt(0).toUpperCase() + name.slice(1)}
+                                </ListItemText>
+                            </MenuItem>
+                        ))}
                     </Paper>
                 </ClickAwayListener>
             </Popper>
@@ -1027,39 +1012,32 @@ const ObjectInstanceView = () => {
                         {currentResourceId && (() => {
                             const resourceType = getResourceType(currentResourceId);
                             const filteredActions = getFilteredResourceActions(resourceType);
-                            return filteredActions.map(({name, icon, color}) => {
-                                const isAllowed = true;
-                                return (
-                                    <MenuItem
-                                        key={name}
-                                        onClick={() => {
-                                            handleResourceAction(name, currentResourceId);
-                                            setResourceMenuAnchor(null);
-                                        }}
-                                        disabled={actionInProgress}
+                            return filteredActions.map(({name, icon, color}) => (
+                                <MenuItem
+                                    key={name}
+                                    onClick={() => {
+                                        handleResourceAction(name, currentResourceId);
+                                        setResourceMenuAnchor(null);
+                                    }}
+                                    disabled={actionInProgress}
+                                    sx={{
+                                        color: color === "red" ? "error.main" : "inherit",
+                                        '&.Mui-disabled': {opacity: 0.5},
+                                    }}
+                                >
+                                    <ListItemIcon
                                         sx={{
-                                            color: isAllowed
-                                                ? (color === "red" ? "error.main" : "inherit")
-                                                : "text.disabled",
-                                            '&.Mui-disabled': {opacity: 0.5},
+                                            minWidth: 40,
+                                            color: color === "red" ? "error.main" : "inherit",
                                         }}
                                     >
-                                        <ListItemIcon
-                                            sx={{
-                                                minWidth: 40,
-                                                color: isAllowed
-                                                    ? (color === "red" ? "error.main" : "inherit")
-                                                    : "text.disabled"
-                                            }}
-                                        >
-                                            {icon}
-                                        </ListItemIcon>
-                                        <ListItemText>
-                                            {name.charAt(0).toUpperCase() + name.slice(1)}
-                                        </ListItemText>
-                                    </MenuItem>
-                                );
-                            });
+                                        {icon}
+                                    </ListItemIcon>
+                                    <ListItemText>
+                                        {name.charAt(0).toUpperCase() + name.slice(1)}
+                                    </ListItemText>
+                                </MenuItem>
+                            ));
                         })()}
                     </Paper>
                 </ClickAwayListener>
