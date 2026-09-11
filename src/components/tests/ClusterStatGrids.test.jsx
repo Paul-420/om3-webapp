@@ -199,9 +199,9 @@ describe('ClusterStatGrids', () => {
         const chip4 = screen.getByRole('button', {name: '4'});
         expect(screen.queryByRole('button', {name: '3'})).not.toBeInTheDocument();
 
-        expect(chip1).toHaveStyle('background-color: green');
-        expect(chip2).toHaveStyle('background-color: red');
-        expect(chip4).toHaveStyle('background-color: green');
+        expect(chip1).toHaveStyle('background-color: rgb(0, 128, 0)');
+        expect(chip2).toHaveStyle('background-color: rgb(255, 0, 0)');
+        expect(chip4).toHaveStyle('background-color: rgb(0, 128, 0)');
 
         // Chip click with spinner
         fireEvent.click(chip1);
@@ -226,7 +226,7 @@ describe('ClusterStatGrids', () => {
         const {rerender} = render(<GridHeartbeats heartbeatCount={1} perHeartbeatStats={partial}
                                                   onClick={mockOnClick}/>);
         const chip = screen.getByRole('button', {name: '1'});
-        expect(chip).toHaveStyle('background-color: red');
+        expect(chip).toHaveStyle('background-color: rgb(255, 0, 0)');
     });
 
     // ---------- GridPools ----------
@@ -252,9 +252,9 @@ describe('ClusterStatGrids', () => {
         expect(screen.getByText('pool6 (N/A% used)')).toBeInTheDocument();
 
         const lowChip = screen.getByText('pool1 (95.0% used)').closest('.MuiChip-root');
-        expect(lowChip).toHaveStyle('background-color: red');
+        expect(lowChip).toHaveStyle('background-color: rgb(255, 0, 0)');
         const normalChip = screen.getByText('pool2 (50.0% used)').closest('.MuiChip-root');
-        expect(normalChip).not.toHaveStyle('background-color: red');
+        expect(normalChip).not.toHaveStyle('background-color: rgb(255, 0, 0)');
 
         fireEvent.click(screen.getByText('Pools'));
         jest.runAllTimers();
@@ -280,7 +280,7 @@ describe('ClusterStatGrids', () => {
         expect(screen.getByText('network4 (0% used)')).toBeInTheDocument();
 
         const lowChip = screen.getByText('network2 (91.0% used)').closest('.MuiChip-root');
-        expect(lowChip).toHaveStyle('background-color: red');
+        expect(lowChip).toHaveStyle('background-color: rgb(255, 0, 0)');
 
         fireEvent.click(screen.getByText('Networks'));
         jest.runAllTimers();
